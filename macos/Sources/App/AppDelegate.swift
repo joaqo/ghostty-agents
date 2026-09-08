@@ -212,6 +212,14 @@ class AppDelegate: NSObject,
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let appName = Bundle.main.displayName
+        menuAbout?.title = "About \(appName)"
+        menuQuit?.title = "Quit \(appName)"
+        menuSetAsDefaultTerminal?.title = "Make \(appName) the Default Terminal"
+        let appMenu = menuAbout?.menu
+        appMenu?.title = appName
+        appMenu?.items.first(where: { $0.action == #selector(NSApplication.hide(_:)) })?.title = "Hide \(appName)"
+
         // System settings overrides
         UserDefaults.ghostty.register(defaults: [
             // Disable this so that repeated key events make it through to our terminal views.
@@ -1286,6 +1294,9 @@ extension AppDelegate {
 extension AppDelegate: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(checkForUpdates(_:)):
+            return updateController.isEnabled
+
         case #selector(setAsDefaultTerminal(_:)):
             return NSWorkspace.shared.defaultTerminal != Bundle.main.bundleURL
 
@@ -1332,7 +1343,7 @@ extension AppDelegate {
         if controllersNeedConfirmation.count == 1 {
             Task {
                 let response = await controllersNeedConfirmation[0].confirmCloseAsync(
-                    messageText: "Quit Ghostty?",
+                    messageText: "Quit \(Bundle.main.displayName)?",
                     informativeText: "The terminal still has a running process. If you quit, the process will be killed.",
                     confirmButtonTitle: "Terminate",
                 )
@@ -1366,7 +1377,7 @@ extension AppDelegate {
         Task {
             for controller in controllers {
                 let response = await controller.confirmCloseAsync(
-                    messageText: "Quit Ghostty?",
+                    messageText: "Quit \(Bundle.main.displayName)?",
                     informativeText: "The terminal still has a running process. If you quit, the process will be killed.",
                     confirmButtonTitle: "Terminate",
                 )

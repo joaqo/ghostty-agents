@@ -8,6 +8,13 @@
   (except to build the underlying library as mentioned above).
   - Build: `macos/build.nu [--scheme Ghostty] [--configuration Debug] [--action build]`
   - Output: `macos/build/<configuration>/Ghostty.app` (e.g. `macos/build/Debug/Ghostty.app`)
+    or `macos/build/ReleaseLocal/Ghostty Agents.app` for Ghostty Agents.
+- Ghostty Agents' `ReleaseLocal` configuration uses the persistent `Ghostty Sidebar Local`
+  signing identity. Follow [Ghostty Agents setup](../GHOSTTY_AGENTS.md#build) and preserve that
+  Keychain identity across rebuilds; do not fall back to ad-hoc signing. If signing
+  or Accessibility prompts repeat, inspect the saved permissions before retrying.
+  Any password authorization must happen in Apple's native UI; never ask the user
+  to enter their login password in a script or terminal command.
 - Run unit tests directly with `macos/build.nu --action test`
 
 ## AppleScript

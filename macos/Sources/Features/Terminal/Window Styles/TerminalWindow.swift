@@ -34,6 +34,11 @@ class TerminalWindow: NSWindow {
     /// The configuration derived from the Ghostty config so we don't need to rely on references.
     private(set) var derivedConfig: DerivedConfig = .init()
 
+    private(set) var usesTabSidebar = false
+
+    // SwiftUI rows can be recreated when native tabs move the hosting view between windows.
+    private(set) lazy var tabSidebarRevealState = TerminalTabSidebarRevealState()
+
     /// Sets up our tab context menu
     private var tabMenuObserver: NSObjectProtocol?
 
@@ -64,6 +69,7 @@ class TerminalWindow: NSWindow {
         didSet {
             guard tabColor != oldValue else { return }
             tabColorIndicator.rootView = TabColorIndicatorView(tabColor: tabColor)
+            NotificationCenter.default.post(name: TerminalTabSidebarModel.didChange, object: self)
             invalidateRestorableState()
         }
     }
@@ -119,6 +125,7 @@ class TerminalWindow: NSWindow {
 
         // If window decorations are disabled, remove our title
         if !config.windowDecorations { styleMask.remove(.titled) }
+        if config.macosTabSidebar { configureTabSidebar() }
 
         // NOTE: setInitialWindowPosition is NOT called here because subclass
         // awakeFromNib may add decorations (e.g. toolbar for tabs style) that
@@ -132,7 +139,7 @@ class TerminalWindow: NSWindow {
 
         // Create our reset zoom titlebar accessory. We have to have a title
         // to do this or AppKit triggers an assertion.
-        if styleMask.contains(.titled) {
+        if styleMask.contains(.titled) && !usesTabSidebar {
             resetZoomAccessory.layoutAttribute = .right
             resetZoomAccessory.view = NSHostingView(rootView: ResetZoomAccessoryView(
                 viewModel: viewModel,
@@ -178,6 +185,29 @@ class TerminalWindow: NSWindow {
     // still become key/main and receive events.
     override var canBecomeKey: Bool { return true }
     override var canBecomeMain: Bool { return true }
+
+    override var contentLayoutRect: CGRect {
+        guard usesTabSidebar else { return super.contentLayoutRect }
+        // The terminal must receive mouse events in the transparent titlebar area.
+        return NSRect(origin: .zero, size: frame.size)
+    }
+
+    override func update() {
+        super.update()
+        if usesTabSidebar {
+            titleVisibility = .hidden
+            titlebarAppearsTransparent = true
+            titlebarSeparatorStyle = .none
+        }
+    }
+
+    func configureTabSidebar() {
+        usesTabSidebar = true
+        styleMask.insert(.fullSizeContentView)
+        titleVisibility = .hidden
+        titlebarAppearsTransparent = true
+        titlebarSeparatorStyle = .none
+    }
 
     override func sendEvent(_ event: NSEvent) {
         if tabTitleEditor.handleMouseDown(event) {
@@ -228,7 +258,8 @@ class TerminalWindow: NSWindow {
 
     @discardableResult
     func beginInlineTabTitleEdit(for targetWindow: NSWindow) -> Bool {
-        tabTitleEditor.beginEditing(for: targetWindow)
+        guard !usesTabSidebar else { return false }
+        return tabTitleEditor.beginEditing(for: targetWindow)
     }
 
     @objc private func renameTabFromContextMenu(_ sender: NSMenuItem) {
@@ -251,6 +282,14 @@ class TerminalWindow: NSWindow {
         }
     }
 
+    override func moveTabToNewWindow(_ sender: Any?) {
+        let sourceGroup = tabGroup
+        super.moveTabToNewWindow(sender)
+        guard usesTabSidebar else { return }
+        terminalController?.prepareTabSidebar()
+        (sourceGroup?.selectedWindow as? TerminalWindow)?.terminalController?.prepareTabSidebar()
+    }
+
     override func addTitlebarAccessoryViewController(_ childViewController: NSTitlebarAccessoryViewController) {
         super.addTitlebarAccessoryViewController(childViewController)
 
@@ -259,6 +298,7 @@ class TerminalWindow: NSWindow {
         // it. This has been verified to work on macOS 12 to 26
         if isTabBar(childViewController) {
             childViewController.identifier = Self.tabBarIdentifier
+            if usesTabSidebar { childViewController.isHidden = true }
             tabBarDidAppear()
         }
     }
@@ -308,6 +348,9 @@ class TerminalWindow: NSWindow {
     }
 
     private func tabBarDidAppear() {
+        if usesTabSidebar {
+            hideNativeTabBarForSidebar()
+        }
         // Remove our reset zoom accessory. For some reason having a SwiftUI
         // titlebar accessory causes our content view scaling to be wrong.
         // Removing it fixes it, we just need to remember to add it again later.
@@ -320,11 +363,25 @@ class TerminalWindow: NSWindow {
     }
 
     private func tabBarDidDisappear() {
-        if styleMask.contains(.titled) {
+        if styleMask.contains(.titled) && !usesTabSidebar {
             if titlebarAccessoryViewControllers.firstIndex(of: resetZoomAccessory) == nil {
                 addTitlebarAccessoryViewController(resetZoomAccessory)
             }
         }
+    }
+
+    func hideNativeTabBarForSidebar() {
+        guard usesTabSidebar else { return }
+        for accessory in titlebarAccessoryViewControllers where isTabBar(accessory) {
+            // Hiding the accessory collapses its height while preserving AppKit's tab group.
+            accessory.isHidden = true
+            accessory.view.setAccessibilityHidden(true)
+        }
+    }
+
+    override func toggleTabBar(_ sender: Any?) {
+        guard !usesTabSidebar else { return }
+        super.toggleTabBar(sender)
     }
 
     // MARK: Tab Key Equivalents
@@ -359,6 +416,7 @@ class TerminalWindow: NSWindow {
     /// Set to true if a surface is currently zoomed to show the reset zoom button.
     var surfaceIsZoomed: Bool = false {
         didSet {
+            NotificationCenter.default.post(name: TerminalTabSidebarModel.didChange, object: self)
             // Show/hide our reset zoom button depending on if we're zoomed.
             // We want to show it if we are zoomed.
             resetZoomTabButton.isHidden = !surfaceIsZoomed
@@ -393,6 +451,7 @@ class TerminalWindow: NSWindow {
 
     override var title: String {
         didSet {
+            if usesTabSidebar { titleVisibility = .hidden }
             // Whenever we change the window title we must also update our
             // tab title if we're using custom fonts.
             tab.attributedTitle = attributedTitle

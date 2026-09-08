@@ -19,6 +19,8 @@ extension Ghostty {
             }
         }
 
+        private(set) var hasResolvedTitle = false
+
         // The progress report (if any)
         override var progressReport: Action.ProgressReport? {
             didSet {
@@ -606,6 +608,7 @@ extension Ghostty {
                 } else {
                     // Set the title and prevent it from being changed automatically
                     titleFromTerminal = title
+                    hasResolvedTitle = true
                     title = newTitle
                 }
             }
@@ -636,6 +639,7 @@ extension Ghostty {
                     self?.titleFromTerminal = title
                     return
                 }
+                self?.hasResolvedTitle = !title.isEmpty
                 self?.title = title
             }
         }
@@ -1885,6 +1889,7 @@ extension Ghostty {
 
             // Restore the saved title after initialization
             if let title = savedTitle {
+                self.hasResolvedTitle = !title.isEmpty
                 self.title = title
                 // If this was a user-set title, we need to prevent it from being overwritten
                 if isUserSetTitle {

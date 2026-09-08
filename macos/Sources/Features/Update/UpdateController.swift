@@ -16,6 +16,10 @@ class UpdateController {
         userDriver.viewModel
     }
 
+    var isEnabled: Bool {
+        Bundle.main.bundleIdentifier != "uy.joaqo.ghostty.sidebar"
+    }
+
     /// True if we're installing an update triggered manually.
     var shouldTerminateWithoutWarning: Bool {
         viewModel.state.shouldTerminateWithoutWarning
@@ -40,6 +44,7 @@ class UpdateController {
     /// This must be called before the updater can check for updates. If starting fails,
     /// the error will be shown to the user.
     func startUpdater() {
+        guard isEnabled else { return }
         do {
             try updater.start()
         } catch {
@@ -60,6 +65,7 @@ class UpdateController {
     ///
     /// This is typically connected to a menu item action.
     func checkForUpdates() {
+        guard isEnabled else { return }
         // If we're already idle, then just check for updates immediately.
         if viewModel.state == .idle {
             updater.checkForUpdates()

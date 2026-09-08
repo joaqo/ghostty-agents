@@ -315,6 +315,13 @@
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <menu key="submenu" title="View" id="m6z-2H-VW7">
                         <items>
+                            <menuItem title="Hide Sidebar" keyEquivalent="l" id="sbv-Hd-9kQ">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="toggleTabSidebar:" target="-1" id="sba-Tg-2pM"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="sbs-Sp-4rN"/>
                             <menuItem title="Reset Font Size" id="Jah-MY-aLX">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>

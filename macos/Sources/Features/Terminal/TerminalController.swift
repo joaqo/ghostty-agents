@@ -12,6 +12,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return defaultValue }
         let config = appDelegate.ghostty.config
 
+        if config.macosTabSidebar { return defaultValue }
+
         // If we have no window decorations, there's no reason to do anything but
         // the default titlebar (because there will be no titlebar).
         if !config.windowDecorations {
@@ -60,6 +62,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     /// The notification cancellable for focused surface property changes.
     private var surfaceAppearanceCancellables: Set<AnyCancellable> = []
+
+    private let tabSidebarSlot = TerminalTabSidebarSlotView()
+    private var tabSidebarFullscreenTransition: TerminalTabSidebarPresentation?
 
     init(_ ghostty: Ghostty.App,
          withBaseConfig base: Ghostty.SurfaceConfiguration? = nil,
@@ -481,6 +486,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 tabCreated = parent.addTabbedWindowSafely(window, ordered: .above)
             }
             if tabCreated {
+                controller.prepareTabSidebar()
                 // We set the selectedWindow early here because we want the next window
                 // to become first responder as quickly as possible. Usually this is
                 // set while `-[NSWindowController showWindow:]` is called, but we're
@@ -552,6 +558,18 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     }
 
     // MARK: - Methods
+
+    func prepareTabSidebar() {
+        guard let window = window as? TerminalWindow, window.usesTabSidebar else { return }
+        window.contentView?.layoutSubtreeIfNeeded()
+        TerminalTabSidebarPresentation.shared(for: window).present(in: tabSidebarSlot)
+    }
+
+    @objc func toggleTabSidebar(_ sender: Any?) {
+        guard let window = window as? TerminalWindow, window.usesTabSidebar,
+              NSApp.currentEvent?.isARepeat != true else { return }
+        TerminalTabSidebarPresentation.shared(for: window).model.toggleVisibility()
+    }
 
     @objc private func ghosttyConfigDidChange(_ notification: Notification) {
         // Get our managed configuration object out
@@ -1108,8 +1126,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         // Initialize our content view to the SwiftUI root
+        let usesTabSidebar = (window as? TerminalWindow)?.usesTabSidebar == true
         let container = TerminalViewContainer {
-            TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            if usesTabSidebar {
+                TerminalSidebarContainer(sidebar: tabSidebarSlot) {
+                    TerminalView(ghostty: self.ghostty, viewModel: self, delegate: self)
+                }
+            } else {
+                TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            }
         }
 
         // Set the initial content size on the container so that
@@ -1117,6 +1142,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // without waiting for @FocusedValue to propagate through the
         // SwiftUI focus chain.
         container.initialContentSize = focusedSurface?.initialSize
+        if usesTabSidebar {
+            let padding = TerminalTabSidebarLayout.contentPadding * 2
+            container.initialContentSize?.width += TerminalTabSidebarLayout.initialWidth + 1 + padding
+            container.initialContentSize?.height += padding
+        }
 
         window.contentView = container
 
@@ -1171,27 +1201,31 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     override func showWindow(_ sender: Any?) {
         guard let terminalWindow = window as? TerminalWindow else { return }
 
-        // Set the initial window position. This must happen after the window
-        // is fully set up (content view, toolbar, default size) so that
-        // decorations added by subclass awakeFromNib (e.g. toolbar for tabs
-        // style) don't change the frame after the position is restored.
-        let originChanged = terminalWindow.setInitialWindowPosition(
-            x: derivedConfig.windowPositionX,
-            y: derivedConfig.windowPositionY,
-        )
-        let restored = LastWindowPosition.shared.restore(
-            terminalWindow,
-            origin: !originChanged,
-            size: defaultSize == nil,
-        )
+        // AppKit gives new fullscreen tabs their Space's frame before showWindow runs.
+        if !terminalWindow.styleMask.contains(.fullScreen) {
+            // Set the initial window position. This must happen after the window
+            // is fully set up (content view, toolbar, default size) so that
+            // decorations added by subclass awakeFromNib (e.g. toolbar for tabs
+            // style) don't change the frame after the position is restored.
+            let originChanged = terminalWindow.setInitialWindowPosition(
+                x: derivedConfig.windowPositionX,
+                y: derivedConfig.windowPositionY,
+            )
+            let restored = LastWindowPosition.shared.restore(
+                terminalWindow,
+                origin: !originChanged,
+                size: defaultSize == nil,
+            )
 
-        // If nothing is changed for the frame,
-        // we should center the window
-        if !originChanged, !restored {
-            // This doesn't work in `windowDidLoad` somehow
-            terminalWindow.center()
+            // If nothing is changed for the frame,
+            // we should center the window
+            if !originChanged, !restored {
+                // This doesn't work in `windowDidLoad` somehow
+                terminalWindow.center()
+            }
         }
 
+        prepareTabSidebar()
         super.showWindow(sender)
 
         syncAppearance()
@@ -1205,6 +1239,68 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     }
 
     // MARK: NSWindowDelegate
+
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        beginTabSidebarFullscreenTransition(entering: true)
+    }
+
+    func windowWillExitFullScreen(_ notification: Notification) {
+        beginTabSidebarFullscreenTransition(entering: false)
+    }
+
+    private func beginTabSidebarFullscreenTransition(entering: Bool) {
+        guard let window = window as? TerminalWindow, window.usesTabSidebar else { return }
+        let presentation = TerminalTabSidebarPresentation.shared(for: window)
+        guard presentation.beginFullscreenTransition(for: window, entering: entering) else { return }
+        tabSidebarFullscreenTransition = presentation
+    }
+
+    func customWindowsToEnterFullScreen(for window: NSWindow) -> [NSWindow]? {
+        beginTabSidebarFullscreenTransition(entering: true)
+        guard tabSidebarFullscreenTransition != nil else { return nil }
+        return [window]
+    }
+
+    func customWindowsToExitFullScreen(for window: NSWindow) -> [NSWindow]? {
+        beginTabSidebarFullscreenTransition(entering: false)
+        guard tabSidebarFullscreenTransition?.windowedFrame != nil else { return nil }
+        return [window]
+    }
+
+    func window(_ window: NSWindow, startCustomAnimationToEnterFullScreenOn screen: NSScreen,
+                withDuration duration: TimeInterval) {
+        guard let window = window as? TerminalWindow else { return }
+        tabSidebarFullscreenTransition?.animateFullscreenTransition(for: window, to: screen.frame, duration: duration)
+    }
+
+    func window(_ window: NSWindow, startCustomAnimationToExitFullScreenWithDuration duration: TimeInterval) {
+        guard let window = window as? TerminalWindow,
+              let presentation = tabSidebarFullscreenTransition,
+              let frame = presentation.windowedFrame else { return }
+        presentation.animateFullscreenTransition(for: window, to: frame, duration: duration)
+    }
+
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        finishTabSidebarFullscreenTransition()
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        finishTabSidebarFullscreenTransition()
+    }
+
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        finishTabSidebarFullscreenTransition(failed: true)
+    }
+
+    func windowDidFailToExitFullScreen(_ window: NSWindow) {
+        finishTabSidebarFullscreenTransition(failed: true)
+    }
+
+    private func finishTabSidebarFullscreenTransition(failed: Bool = false) {
+        guard let window = window as? TerminalWindow else { return }
+        tabSidebarFullscreenTransition?.finishFullscreenTransition(for: window, failed: failed)
+        tabSidebarFullscreenTransition = nil
+    }
 
     // TabGroupCloseCoordinator.Controller
     lazy private(set) var tabGroupCloseCoordinator = TabGroupCloseCoordinator()
@@ -1261,6 +1357,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     override func windowDidBecomeKey(_ notification: Notification) {
         super.windowDidBecomeKey(notification)
+        prepareTabSidebar()
         self.relabelTabs()
         self.fixTabBar()
     }
@@ -1698,6 +1795,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 extension TerminalController {
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(toggleTabSidebar):
+            guard let window = window as? TerminalWindow, window.usesTabSidebar else { return false }
+            let model = TerminalTabSidebarPresentation.shared(for: window).model
+            item.title = model.isVisible ? "Hide Sidebar" : "Show Sidebar"
+            return true
+
         case #selector(closeTabsOnTheRight):
             guard let window, let tabGroup = window.tabGroup else { return false }
             guard let currentIndex = tabGroup.windows.firstIndex(of: window) else { return false }

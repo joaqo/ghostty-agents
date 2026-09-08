@@ -1,3 +1,8 @@
+**Ghostty Agents** is a personal macOS fork of Ghostty for agentic coding.
+See [features, setup, and build instructions](GHOSTTY_AGENTS.md).
+
+---
+
 <!-- LOGO -->
 <h1>
 <p align="center">

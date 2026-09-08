@@ -3346,6 +3346,12 @@ keybind: Keybinds = .{},
 /// Available since: 1.2.0
 @"macos-window-buttons": MacWindowButtons = .visible,
 
+/// Display tabs in a resizable left sidebar on macOS. The terminal fills the
+/// window height, with window buttons over the sidebar. This takes precedence
+/// over `macos-titlebar-style`.
+/// Changes apply to new windows. This option is enabled by default in this fork.
+@"macos-tab-sidebar": bool = true,
+
 /// The style of the macOS titlebar. Available values are: "native",
 /// "transparent", "tabs", and "hidden".
 ///
