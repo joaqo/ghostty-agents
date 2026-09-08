@@ -567,6 +567,7 @@ private struct TerminalTabSidebarRow: View {
     let isDragging: Bool
     @ObservedObject private var revealState: TerminalTabSidebarRevealState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     init(model: TerminalTabSidebarModel, tab: TerminalTabSidebarModel.Tab, selected: Bool, isDragging: Bool) {
         self.model = model
@@ -576,13 +577,18 @@ private struct TerminalTabSidebarRow: View {
         self.revealState = tab.revealState
     }
 
+    private var numberColor: Color {
+        if selected { return colorScheme == .dark ? .white : .black }
+        return tab.color.map(Color.init(nsColor:)) ?? .secondary
+    }
+
     var body: some View {
         Button { model.select(tab) } label: {
             HStack(spacing: 6) {
                 Text(String(tab.number))
                     .font(.system(size: selected ? 14 : 12, weight: selected ? .bold : .medium))
                     .monospacedDigit()
-                    .foregroundStyle(tab.color.map(Color.init(nsColor:)) ?? (selected ? .primary : .secondary))
+                    .foregroundStyle(numberColor)
                     .frame(width: 24, height: 24)
                     .opacity(revealState.isRevealed ? 1 : 0)
                 Text(tab.title)
