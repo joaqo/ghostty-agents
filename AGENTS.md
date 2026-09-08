@@ -15,10 +15,13 @@ A file for [guiding coding agents](https://agents.md/).
 - **Formatting (Zig)**: `zig fmt .`
 - **Formatting (Swift)**: `swiftlint lint --strict --fix`
 - **Formatting (other)**: `prettier -w .`
-- After each Ghostty Agents update, quit and relaunch
-  `/Applications/Ghostty Agents.app` and verify that the updated build is running.
-  Launch with a clean environment containing only standard login variables and
-  `PATH`; agent variables such as `NO_COLOR` must not reach the app or its shells.
+- Never stop, quit, or restart the user's running Ghostty Agents instance: it
+  hosts the agent session. Build and verify updates in a separate test app bundle
+  and instance, leaving `/Applications/Ghostty Agents.app` and its running process
+  untouched.
+  Launch the test instance with a clean environment containing only standard login
+  variables and `PATH`; agent variables such as `NO_COLOR` must not reach the app
+  or its shells.
 
 ## libghostty-vt
 
