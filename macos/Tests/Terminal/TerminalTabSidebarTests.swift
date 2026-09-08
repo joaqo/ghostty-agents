@@ -135,6 +135,11 @@ struct TerminalTabSidebarTests {
         }
     }
 
+    private func dragViews(in view: NSView) -> [TerminalTabDragHandle.DragView] {
+        if let view = view as? TerminalTabDragHandle.DragView { return [view] }
+        return view.subviews.flatMap { dragViews(in: $0) }
+    }
+
     @Test(.timeLimit(.minutes(1))) func nativeFullscreenRestoresFrameFromANewTab() async throws {
         let app = try #require((NSApp.delegate as? AppDelegate)?.ghostty)
         var config = Ghostty.SurfaceConfiguration()
@@ -263,6 +268,150 @@ struct TerminalTabSidebarTests {
         for (window, view) in zip(windows, originalViews) {
             #expect(window.contentView === view)
         }
+    }
+
+    @Test func dragPreviewOpensAGapBeforeDropAndTracksDirectionChanges() {
+        let windows = makeWindows(["First", "Second", "Third", "Fourth"])
+        defer { windows.forEach { $0.close() } }
+        let model = TerminalTabSidebarModel(window: windows[0])
+        let originalOrder = model.tabs.map(\.id)
+        let selectedWindow = windows[0].tabGroup?.selectedWindow
+        let stride = TerminalTabSidebarLayout.stride
+
+        model.beginDrag(originalOrder[1])
+        model.updateDrag(offset: stride * 0.4)
+        #expect(model.tabs.map { model.position(for: $0) } == [0, stride * 1.4, stride * 2, stride * 3])
+
+        model.updateDrag(offset: stride * 1.6)
+        #expect(model.tabs.map { model.position(for: $0) } == [0, stride * 2.6, stride, stride * 2])
+        #expect(model.tabs.map(\.id) == originalOrder)
+        #expect(windows[0].tabGroup?.windows.map(ObjectIdentifier.init) == originalOrder)
+
+        model.updateDrag(offset: -stride * 0.8)
+        #expect(abs(model.position(for: model.tabs[1]) - stride * 0.2) < 0.001)
+        #expect(model.position(for: model.tabs[0]) == stride)
+        #expect(model.position(for: model.tabs[2]) == stride * 2)
+        #expect(model.position(for: model.tabs[3]) == stride * 3)
+
+        model.finishDrag()
+        #expect(model.drag == nil)
+        #expect(model.tabs.map(\.id) == [originalOrder[1], originalOrder[0], originalOrder[2], originalOrder[3]])
+        #expect(model.tabs.map { model.position(for: $0) } == [0, stride, stride * 2, stride * 3])
+        #expect(windows[0].tabGroup?.selectedWindow === selectedWindow)
+    }
+
+    @Test func dragPreviewStaysInsideTheListAndCanBeCancelled() {
+        let windows = makeWindows(["First", "Second", "Third"])
+        defer { windows.forEach { $0.close() } }
+        let model = TerminalTabSidebarModel(window: windows[0])
+        let originalOrder = model.tabs.map(\.id)
+        let stride = TerminalTabSidebarLayout.stride
+
+        model.beginDrag(originalOrder[0])
+        model.updateDrag(offset: 1000)
+        #expect(model.tabs.map { model.position(for: $0) } == [stride * 2, 0, stride])
+        model.cancelDrag()
+        model.updateDrag(offset: 1000)
+        model.finishDrag()
+        #expect(model.tabs.map(\.id) == originalOrder)
+        #expect(model.tabs.map { model.position(for: $0) } == [0, stride, stride * 2])
+
+        model.beginDrag(originalOrder[2])
+        model.updateDrag(offset: -1000)
+        #expect(model.tabs.map { model.position(for: $0) } == [stride, stride * 2, 0])
+        model.finishDrag()
+        #expect(model.tabs.map(\.id) == [originalOrder[2], originalOrder[0], originalOrder[1]])
+    }
+
+    @Test func changingTheTabGroupCancelsItsDragPreview() {
+        let windows = makeWindows(["First", "Second", "Third"])
+        defer { windows.forEach { $0.close() } }
+        let model = TerminalTabSidebarModel(window: windows[0])
+        model.beginDrag(model.tabs[0].id)
+        model.updateDrag(offset: TerminalTabSidebarLayout.stride * 2)
+        #expect(model.drag != nil)
+
+        windows[2].close()
+        model.refresh()
+        model.updateDrag(offset: TerminalTabSidebarLayout.stride)
+        model.finishDrag()
+        #expect(model.drag == nil)
+        #expect(model.tabs.map(\.title) == ["First", "Second"])
+    }
+
+    @Test func rowsMoveAsideWhileTheMouseIsStillDown() async throws {
+        let windows = makeWindows(["First", "Second", "Third"])
+        defer { windows.forEach { $0.close() } }
+        let presentation = TerminalTabSidebarPresentation.shared(for: windows[0])
+        let originalOrder = presentation.model.tabs.map(\.id)
+        let sidebar = presentation.view
+        windows[0].contentView = sidebar
+        windows[0].makeKeyAndOrderFront(nil)
+        await settleWindowChanges()
+        sidebar.layoutSubtreeIfNeeded()
+
+        let views = dragViews(in: sidebar).sorted {
+            $0.convert($0.bounds, to: sidebar).minY < $1.convert($1.bounds, to: sidebar).minY
+        }
+        try #require(views.count == 3)
+        let initialPositions = views.map { $0.convert($0.bounds, to: sidebar).minY }
+        let source = views[0]
+        let start = source.convert(NSPoint(x: source.bounds.midX, y: source.bounds.midY), to: nil)
+        let stride = TerminalTabSidebarLayout.stride
+        func event(_ type: NSEvent.EventType, offset: CGFloat) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(
+                with: type, location: NSPoint(x: start.x, y: start.y - offset),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: windows[0].windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+        }
+
+        source.mouseDown(with: try event(.leftMouseDown, offset: 0))
+        source.mouseDragged(with: try event(.leftMouseDragged, offset: stride * 1.6))
+        try await Task.sleep(for: .milliseconds(300))
+        sidebar.layoutSubtreeIfNeeded()
+        #expect(presentation.model.drag != nil)
+        #expect(presentation.model.tabs.map(\.id) == originalOrder)
+        #expect(abs(source.convert(source.bounds, to: sidebar).minY - initialPositions[0] - stride * 1.6) < 1)
+        for index in 1..<3 {
+            #expect(abs(views[index].convert(views[index].bounds, to: sidebar).minY - initialPositions[index] + stride) < 1)
+        }
+
+        source.mouseUp(with: try event(.leftMouseUp, offset: stride * 1.6))
+        #expect(presentation.model.drag == nil)
+        #expect(presentation.model.tabs.map(\.id) == [originalOrder[1], originalOrder[2], originalOrder[0]])
+    }
+
+    @Test func selectingAnOffscreenTabScrollsItIntoView() async throws {
+        let windows = makeWindows((1...15).map { "Tab \($0)" })
+        defer { windows.forEach { $0.close() } }
+        windows[0].tabGroup?.selectedWindow = windows[0]
+        let presentation = TerminalTabSidebarPresentation.shared(for: windows[0])
+        let sidebar = presentation.view
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 200),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
+        defer { host.close() }
+        host.contentView = sidebar
+        host.makeKeyAndOrderFront(nil)
+        await settleWindowChanges()
+        sidebar.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        let scrollView = try #require(dragViews(in: sidebar).first?.enclosingScrollView)
+        let document = try #require(scrollView.documentView)
+        let lastTab = try #require(presentation.model.tabs.last)
+        let lastPosition = presentation.model.position(for: lastTab)
+        try #require(presentation.model.selectedID != lastTab.id)
+        #expect(scrollView.documentVisibleRect.maxY < lastPosition)
+
+        windows[0].tabGroup?.selectedWindow = lastTab.window
+        presentation.model.refresh()
+        try #require(presentation.model.selectedID == lastTab.id)
+        try await Task.sleep(for: .milliseconds(300))
+        sidebar.layoutSubtreeIfNeeded()
+        let lastRowCenter = NSPoint(x: document.bounds.midX, y: lastPosition + TerminalTabSidebarLayout.rowHeight / 2)
+        #expect(scrollView.documentVisibleRect.contains(lastRowCenter))
     }
 
     @Test func tracksNewTabsAfterStartingWithOneWindow() async throws {

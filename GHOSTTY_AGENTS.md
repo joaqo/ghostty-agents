@@ -6,7 +6,8 @@ A personal macOS fork of Ghostty for agentic coding.
 
 Tabs appear in a resizable left column, enabled by default.
 The sidebar supports numbered tabs, live titles, tab colors, bell indicators,
-drag reordering using the tab number, and a right-click menu for renaming or closing tabs. Existing shortcuts,
+and drag reordering from anywhere on a tab row. Neighboring tabs slide aside as
+you drag; Escape cancels the move. A right-click menu supports renaming or closing tabs. Existing shortcuts,
 splits, close confirmations, undo, and session restoration use Ghostty's native
 tab groups. Sidebar width is remembered across windows and launches.
 Each tab group owns one sidebar view and model, preserving its rows and scroll state

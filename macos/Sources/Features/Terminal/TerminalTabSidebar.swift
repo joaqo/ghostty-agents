@@ -16,7 +16,18 @@ final class TerminalTabSidebarModel: ObservableObject {
         let revealState: TerminalTabSidebarRevealState
     }
 
+    struct Drag {
+        let id: ObjectIdentifier
+        let sourceIndex: Int
+        var position: CGFloat
+
+        var destinationIndex: Int {
+            Int((position / TerminalTabSidebarLayout.stride).rounded())
+        }
+    }
+
     @Published private(set) var tabs: [Tab] = []
+    @Published private(set) var drag: Drag?
     @Published private(set) var selectedID: ObjectIdentifier?
     @Published private(set) var topInset: CGFloat = 26
     @Published private(set) var isVisible = true
@@ -79,6 +90,7 @@ final class TerminalTabSidebarModel: ObservableObject {
     func refresh() {
         let windows = self.windows
         if tabs.map(\.id) != windows.map(ObjectIdentifier.init) {
+            cancelDrag()
             titleObservations = windows.map { window in
                 window.observe(\.title) { [weak self] _, _ in self?.scheduleRefresh() }
             }
@@ -143,6 +155,42 @@ final class TerminalTabSidebarModel: ObservableObject {
 
     func newTab() {
         window?.terminalController?.newWindowForTab(nil)
+    }
+
+    @discardableResult
+    func beginDrag(_ id: ObjectIdentifier) -> Bool {
+        guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.id == id }) else { return false }
+        drag = Drag(id: id, sourceIndex: index, position: CGFloat(index) * TerminalTabSidebarLayout.stride)
+        return true
+    }
+
+    func updateDrag(offset: CGFloat) {
+        guard var drag else { return }
+        let stride = TerminalTabSidebarLayout.stride
+        let position = (CGFloat(drag.sourceIndex) * stride + offset).clamped(to: 0...(CGFloat(tabs.count - 1) * stride))
+        guard position != drag.position else { return }
+        drag.position = position
+        self.drag = drag
+    }
+
+    func position(for tab: Tab) -> CGFloat {
+        let index = tab.number - 1
+        let stride = TerminalTabSidebarLayout.stride
+        guard let drag else { return CGFloat(index) * stride }
+        if tab.id == drag.id { return drag.position }
+        if index > drag.sourceIndex && index <= drag.destinationIndex { return CGFloat(index - 1) * stride }
+        if index < drag.sourceIndex && index >= drag.destinationIndex { return CGFloat(index + 1) * stride }
+        return CGFloat(index) * stride
+    }
+
+    func finishDrag() {
+        guard let drag else { return }
+        move(drag.id, to: tabs[drag.destinationIndex].id)
+        cancelDrag()
+    }
+
+    func cancelDrag() {
+        if drag != nil { drag = nil }
     }
 
     func move(_ sourceID: ObjectIdentifier, to destinationID: ObjectIdentifier) {
@@ -427,20 +475,43 @@ struct TerminalSidebarContainer<Content: View>: View {
 
 private struct TerminalTabSidebar: View {
     @ObservedObject var model: TerminalTabSidebarModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private struct ScrollTarget: Hashable {
+        let id: ObjectIdentifier
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(spacing: TerminalTabSidebarLayout.spacing) {
+                ZStack(alignment: .top) {
+                    // Scroll targets need row-sized bounds, without the positioning padding.
+                    VStack(spacing: TerminalTabSidebarLayout.spacing) {
+                        ForEach(model.tabs) { tab in
+                            Color.clear
+                                .frame(height: TerminalTabSidebarLayout.rowHeight)
+                                .id(ScrollTarget(id: tab.id))
+                        }
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                     ForEach(model.tabs) { tab in
-                        TerminalTabSidebarRow(model: model, tab: tab, selected: model.selectedID == tab.id)
-                            .id(tab.id)
+                        let isDragging = model.drag?.id == tab.id
+                        let position = model.position(for: tab)
+                        TerminalTabSidebarRow(
+                            model: model, tab: tab, selected: model.selectedID == tab.id, isDragging: isDragging
+                        )
+                        .padding(.top, position)
+                        .animation(reduceMotion || isDragging ? nil : .interactiveSpring(
+                            response: 0.22, dampingFraction: 0.9
+                        ), value: position)
+                        .zIndex(isDragging ? 1 : 0)
                     }
                 }
                 .padding(.bottom, 8)
             }
             .onChange(of: model.selectedID) { id in
-                if let id { proxy.scrollTo(id) }
+                if let id { proxy.scrollTo(ScrollTarget(id: id)) }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -454,49 +525,55 @@ private struct TerminalTabSidebarRow: View {
     let model: TerminalTabSidebarModel
     let tab: TerminalTabSidebarModel.Tab
     let selected: Bool
+    let isDragging: Bool
     @ObservedObject private var revealState: TerminalTabSidebarRevealState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var dragOffset: CGFloat = 0
 
-    init(model: TerminalTabSidebarModel, tab: TerminalTabSidebarModel.Tab, selected: Bool) {
+    init(model: TerminalTabSidebarModel, tab: TerminalTabSidebarModel.Tab, selected: Bool, isDragging: Bool) {
         self.model = model
         self.tab = tab
         self.selected = selected
+        self.isDragging = isDragging
         self.revealState = tab.revealState
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(String(tab.number))
-                .font(.system(size: selected ? 14 : 12, weight: selected ? .bold : .medium))
-                .monospacedDigit()
-                .foregroundStyle(tab.color.map(Color.init(nsColor:)) ?? (selected ? .primary : .secondary))
-                .frame(width: 24, height: 24)
-                .opacity(revealState.isRevealed ? 1 : 0)
-                .overlay(TerminalTabDragHandle(tab: tab, model: model, dragOffset: $dragOffset))
-                .help("Drag to reorder tab")
-                .accessibilityLabel("Tab \(tab.number)")
-            Button { model.select(tab) } label: {
-                HStack(spacing: 8) {
-                    Text(tab.title)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .opacity(revealState.isRevealed ? 1 : 0)
-                    Spacer(minLength: 0)
-                }
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(tab.title.isEmpty ? "Tab \(tab.number)" : tab.title)
-            .accessibilityAddTraits(selected ? [.isSelected] : [])
-            if tab.hasBell {
-                Image(systemName: "bell.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+        Button { model.select(tab) } label: {
+            HStack(spacing: 6) {
+                Text(String(tab.number))
+                    .font(.system(size: selected ? 14 : 12, weight: selected ? .bold : .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(tab.color.map(Color.init(nsColor:)) ?? (selected ? .primary : .secondary))
+                    .frame(width: 24, height: 24)
                     .opacity(revealState.isRevealed ? 1 : 0)
-                    .accessibilityLabel("Bell alert")
+                Text(tab.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .opacity(revealState.isRevealed ? 1 : 0)
+                Spacer(minLength: 0)
+                if tab.hasBell {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .opacity(revealState.isRevealed ? 1 : 0)
+                        .accessibilityLabel("Bell alert")
+                }
+                if tab.isZoomed { Color.clear.frame(width: 16, height: 16) }
             }
+            .font(.system(size: 13))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(height: TerminalTabSidebarLayout.rowHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(tab.title.isEmpty ? "Tab \(tab.number)" : tab.title)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .overlay {
+            TerminalTabDragHandle(tab: tab, model: model)
+                .accessibilityHidden(true)
+        }
+        .overlay(alignment: .trailing) {
             if tab.isZoomed {
                 Button { tab.window?.terminalController?.splitZoom(model) } label: {
                     Image("ResetZoom")
@@ -505,18 +582,19 @@ private struct TerminalTabSidebarRow: View {
                         .opacity(revealState.isRevealed ? 1 : 0)
                 }
                 .buttonStyle(.plain)
+                .padding(.trailing, 8)
                 .help("Reset Split Zoom")
                 .accessibilityLabel("Reset Split Zoom")
             }
         }
+        .background {
+            if isDragging {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+            }
+        }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: revealState.isRevealed)
-        .font(.system(size: 13))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .frame(height: TerminalTabSidebarLayout.rowHeight)
-        .contentShape(Rectangle())
-        .offset(y: dragOffset)
-        .zIndex(dragOffset == 0 ? 0 : 1)
         .onAppear {
             if !tab.title.isEmpty { revealState.reveal() }
         }
@@ -548,6 +626,7 @@ enum TerminalTabSidebarLayout {
     static let contentPadding: CGFloat = 12
     static let rowHeight: CGFloat = 34
     static let spacing: CGFloat = 6
+    static let stride = rowHeight + spacing
 
     static var initialWidth: CGFloat {
         let saved = UserDefaults.standard.double(forKey: widthKey)
@@ -561,35 +640,38 @@ private final class TerminalTabSidebarWindowDragView: NSView {
     }
 }
 
-private struct TerminalTabDragHandle: NSViewRepresentable {
+struct TerminalTabDragHandle: NSViewRepresentable {
     let tab: TerminalTabSidebarModel.Tab
     let model: TerminalTabSidebarModel
-    @Binding var dragOffset: CGFloat
 
     func makeNSView(context: Context) -> DragView { DragView() }
 
     func updateNSView(_ view: DragView, context: Context) {
         view.select = { model.select(tab) }
-        view.move = { offset in
-            guard let index = model.tabs.firstIndex(where: { $0.id == tab.id }) else { return }
-            let stride = TerminalTabSidebarLayout.rowHeight + TerminalTabSidebarLayout.spacing
-            let destination = min(model.tabs.count - 1, max(0, index + Int((offset / stride).rounded())))
-            model.move(tab.id, to: model.tabs[destination].id)
-        }
-        view.dragChanged = { dragOffset = $0 }
+        view.dragBegan = { model.beginDrag(tab.id) }
+        view.dragChanged = { model.updateDrag(offset: $0) }
+        view.dragEnded = { model.finishDrag() }
+        view.dragCancelled = { model.cancelDrag() }
     }
 
     final class DragView: NSView {
         var select: (() -> Void)?
-        var move: ((CGFloat) -> Void)?
+        var dragBegan: (() -> Bool)?
         var dragChanged: ((CGFloat) -> Void)?
+        var dragEnded: (() -> Void)?
+        var dragCancelled: (() -> Void)?
         private var startPoint: NSPoint?
         private var dragging = false
+        private var escapeMonitor: Any?
+
+        deinit {
+            if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+        }
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func resetCursorRects() {
-            addCursorRect(bounds, cursor: .openHand)
+            addCursorRect(bounds, cursor: dragging ? .closedHand : .openHand)
         }
 
         override func mouseDown(with event: NSEvent) {
@@ -601,19 +683,37 @@ private struct TerminalTabDragHandle: NSViewRepresentable {
             guard let startPoint else { return }
             let offset = startPoint.y - event.locationInWindow.y
             guard dragging || abs(offset) > 4 else { return }
-            dragging = true
+            if !dragging {
+                guard dragBegan?() == true else { return }
+                dragging = true
+                NSCursor.closedHand.set()
+                escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    guard event.keyCode == 53 else { return event }
+                    self?.dragCancelled?()
+                    self?.resetDrag()
+                    return nil
+                }
+            }
             dragChanged?(offset)
         }
 
         override func mouseUp(with event: NSEvent) {
-            if dragging, let startPoint {
-                move?(startPoint.y - event.locationInWindow.y)
+            guard let startPoint else { return }
+            if dragging {
+                dragChanged?(startPoint.y - event.locationInWindow.y)
+                dragEnded?()
             } else {
                 select?()
             }
-            dragChanged?(0)
+            resetDrag()
+        }
+
+        private func resetDrag() {
+            if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+            escapeMonitor = nil
             startPoint = nil
             dragging = false
+            window?.invalidateCursorRects(for: self)
         }
     }
 }
