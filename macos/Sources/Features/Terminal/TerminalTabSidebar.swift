@@ -222,13 +222,27 @@ final class TerminalTabSidebarRevealState: ObservableObject, Equatable {
 }
 
 final class TerminalTabSidebarPresentation {
+    private final class FullscreenTransition {
+        let window: ObjectIdentifier
+        let frame: NSRect
+        let entering: Bool
+        var isAnimating = false
+        var didFinish = false
+
+        init(window: TerminalWindow, entering: Bool) {
+            self.window = ObjectIdentifier(window)
+            frame = window.frame
+            self.entering = entering
+        }
+    }
+
     private static var associationKey: UInt8 = 0
     let model: TerminalTabSidebarModel
     private let sidebarView: TerminalTabSidebarContentView
     // Fullscreen can be entered and exited from different native tab windows.
     private(set) var windowedFrame: NSRect?
     private var isFullscreen: Bool
-    private var fullscreenTransition: (window: ObjectIdentifier, frame: NSRect, entering: Bool)?
+    private var fullscreenTransition: FullscreenTransition?
     private var hiddenTitlebars: [(view: NSView, alpha: CGFloat)] = []
 
     var view: NSView { sidebarView }
@@ -267,7 +281,7 @@ final class TerminalTabSidebarPresentation {
     func beginFullscreenTransition(for window: TerminalWindow, entering: Bool) -> Bool {
         if let transition = fullscreenTransition { return transition.window == ObjectIdentifier(window) }
         guard entering != isFullscreen else { return false }
-        fullscreenTransition = (ObjectIdentifier(window), window.frame, entering)
+        fullscreenTransition = FullscreenTransition(window: window, entering: entering)
         if entering { windowedFrame = window.frame }
         model.isTransitioningFullscreen = true
         hideTitlebar(for: window)
@@ -277,29 +291,54 @@ final class TerminalTabSidebarPresentation {
 
     func animateFullscreenTransition(for window: TerminalWindow, to frame: NSRect, duration: TimeInterval) {
         guard let transition = fullscreenTransition, transition.window == ObjectIdentifier(window) else { return }
+        transition.isAnimating = true
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         hideTitlebar(for: window)
         let previousInset = model.topInset
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: duration)) {
-            model.setTopInset(fullscreen: transition.entering)
-        }
-        sidebarView.animateTopInset(from: previousInset, duration: reduceMotion ? 0 : duration)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = reduceMotion ? 0 : duration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: duration)) {
+                model.setTopInset(fullscreen: transition.entering)
+            }
+            sidebarView.animateTopInset(from: previousInset, duration: context.duration)
             window.animator().setFrame(frame, display: true)
+        } completionHandler: { [weak self, weak window] in
+            guard let self, let window, self.fullscreenTransition === transition else { return }
+            transition.isAnimating = false
+            if transition.didFinish { self.finishFullscreenTransition(for: window) }
         }
     }
 
     func finishFullscreenTransition(for window: TerminalWindow, failed: Bool = false) {
         guard let transition = fullscreenTransition, transition.window == ObjectIdentifier(window) else { return }
+        transition.didFinish = true
+        // AppKit's fullscreen notification can precede the custom animation's completion.
+        guard failed || !transition.isAnimating else { return }
+        if failed {
+            completeFullscreenTransition(for: window, transition: transition, failed: true)
+        } else {
+            // Let AppKit finish reparenting the titlebar before restoring its visibility.
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window else { return }
+                self.completeFullscreenTransition(for: window, transition: transition)
+            }
+        }
+    }
+
+    private func completeFullscreenTransition(for window: TerminalWindow,
+                                              transition: FullscreenTransition, failed: Bool = false) {
+        guard fullscreenTransition === transition else { return }
         if failed { window.setFrame(transition.frame, display: true) }
         isFullscreen = failed ? !transition.entering : window.styleMask.contains(.fullScreen)
         fullscreenTransition = nil
         model.isTransitioningFullscreen = false
         sidebarView.finishInsetAnimation()
         model.refresh()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         for (titlebar, alpha) in hiddenTitlebars { titlebar.alphaValue = alpha }
+        CATransaction.commit()
         hiddenTitlebars.removeAll()
     }
 

@@ -231,6 +231,69 @@ struct TerminalTabSidebarTests {
         presentation.finishFullscreenTransition(for: window, failed: true)
     }
 
+    @Test(arguments: [true, false])
+    func fullscreenTitlebarWaitsForBothCompletions(nativeFinishesFirst: Bool) async throws {
+        let windows = makeWindows(["First"])
+        defer { windows.forEach { $0.close() } }
+        let window = windows[0]
+        window.configureTabSidebar()
+        let presentation = TerminalTabSidebarPresentation.shared(for: window)
+        let titlebar = try #require(window.titlebarContainer)
+        titlebar.alphaValue = 0.75
+        presentation.beginFullscreenTransition(for: window, entering: true)
+
+        await withCheckedContinuation { continuation in
+            NSAnimationContext.runAnimationGroup { _ in
+                presentation.animateFullscreenTransition(for: window, to: window.frame, duration: 0)
+                if nativeFinishesFirst {
+                    presentation.finishFullscreenTransition(for: window)
+                    #expect(titlebar.alphaValue == 0)
+                    #expect(presentation.model.isTransitioningFullscreen)
+                }
+            } completionHandler: {
+                continuation.resume()
+            }
+        }
+
+        if !nativeFinishesFirst {
+            #expect(titlebar.alphaValue == 0)
+            #expect(presentation.model.isTransitioningFullscreen)
+            presentation.finishFullscreenTransition(for: window)
+            #expect(titlebar.alphaValue == 0)
+        }
+        try await waitForFullscreen(window, fullscreen: false, presentation: presentation)
+        #expect(titlebar.alphaValue == 0.75)
+    }
+
+    @Test(arguments: [true, false])
+    func cancelledFullscreenCompletionCannotRestoreTitlebarDuringRetry(finishNative: Bool) async throws {
+        let windows = makeWindows(["First"])
+        defer { windows.forEach { $0.close() } }
+        let window = windows[0]
+        window.configureTabSidebar()
+        let presentation = TerminalTabSidebarPresentation.shared(for: window)
+        let titlebar = try #require(window.titlebarContainer)
+        titlebar.alphaValue = 0.75
+
+        await withCheckedContinuation { continuation in
+            NSAnimationContext.runAnimationGroup { _ in
+                presentation.beginFullscreenTransition(for: window, entering: true)
+                presentation.animateFullscreenTransition(for: window, to: window.frame, duration: 0)
+                if finishNative { presentation.finishFullscreenTransition(for: window) }
+                presentation.finishFullscreenTransition(for: window, failed: true)
+                #expect(titlebar.alphaValue == 0.75)
+                presentation.beginFullscreenTransition(for: window, entering: true)
+            } completionHandler: {
+                continuation.resume()
+            }
+        }
+        await settleWindowChanges()
+        #expect(titlebar.alphaValue == 0)
+        #expect(presentation.model.isTransitioningFullscreen)
+        presentation.finishFullscreenTransition(for: window, failed: true)
+        #expect(titlebar.alphaValue == 0.75)
+    }
+
     @Test func sidebarViewportKeepsItsWidthAndBottomWhenTopSpacingChanges() throws {
         let windows = makeWindows(["First"])
         defer { windows.forEach { $0.close() } }
