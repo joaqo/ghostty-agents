@@ -17,6 +17,10 @@ Each tab group owns one sidebar view and model, preserving its rows and scroll s
 when a new tab opens or the selected tab changes.
 The selected tab's number is larger, bold, and brighter.
 
+With `window-save-state = always`, quitting with Cmd-Q restores tabs and splits
+in their saved working directories, including tabs opened by the `terminal`
+launcher. Restored terminals start fresh shells without rerunning per-tab startup commands.
+
 The terminal and sidebar fill the window height, with native window buttons
 over the sidebar and no title strip. Drag the sidebar header to move the window.
 The sidebar overrides `macos-titlebar-style`.
