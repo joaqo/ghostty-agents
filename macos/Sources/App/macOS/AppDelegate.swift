@@ -201,6 +201,14 @@ class AppDelegate: NSObject,
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let appName = Bundle.main.displayName
+        menuAbout?.title = "About \(appName)"
+        menuQuit?.title = "Quit \(appName)"
+        menuSetAsDefaultTerminal?.title = "Make \(appName) the Default Terminal"
+        let appMenu = menuAbout?.menu
+        appMenu?.title = appName
+        appMenu?.items.first(where: { $0.action == #selector(NSApplication.hide(_:)) })?.title = "Hide \(appName)"
+
         // System settings overrides
         UserDefaults.ghostty.register(defaults: [
             // Disable this so that repeated key events make it through to our terminal views.
@@ -412,7 +420,7 @@ class AppDelegate: NSObject,
 
         // We have some visible window. Show an app-wide modal to confirm quitting.
         let alert = NSAlert()
-        alert.messageText = "Quit Ghostty?"
+        alert.messageText = "Quit \(Bundle.main.displayName)?"
         alert.informativeText = "All terminal sessions will be terminated."
         alert.addButton(withTitle: "Close Ghostty")
         alert.addButton(withTitle: "Cancel")
@@ -1361,6 +1369,9 @@ extension AppDelegate {
 extension AppDelegate: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(checkForUpdates(_:)):
+            return updateController.isEnabled
+
         case #selector(setAsDefaultTerminal(_:)):
             return NSWorkspace.shared.defaultTerminal != Bundle.main.bundleURL
 

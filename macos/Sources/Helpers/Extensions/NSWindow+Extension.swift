@@ -56,6 +56,32 @@ extension NSWindow {
 
         return success
     }
+
+    func moveTab(to targetWindow: NSWindow) {
+        guard let tabGroup, targetWindow.tabGroup === tabGroup,
+              let selectedWindow = tabGroup.selectedWindow, selectedWindow === self,
+              let sourceIndex = tabGroup.windows.firstIndex(of: self),
+              let targetIndex = tabGroup.windows.firstIndex(of: targetWindow),
+              sourceIndex != targetIndex else { return }
+        let ordering: NSWindow.OrderingMode = sourceIndex > targetIndex ? .below : .above
+
+        // Tahoe's titlebar tabs need focus restored after AppKit updates their constraints.
+        if #available(macOS 26, *), self is TitlebarTabsTahoeTerminalWindow {
+            tabGroup.removeWindow(self)
+            targetWindow.addTabbedWindowSafely(self, ordered: ordering)
+            DispatchQueue.main.async {
+                selectedWindow.makeKey()
+            }
+            return
+        }
+
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        tabGroup.removeWindow(self)
+        targetWindow.addTabbedWindowSafely(self, ordered: ordering)
+        selectedWindow.makeKey()
+        NSAnimationContext.endGrouping()
+    }
 }
 
 /// Native tabbing private API usage. :(

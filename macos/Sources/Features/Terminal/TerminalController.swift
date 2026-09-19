@@ -12,6 +12,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return defaultValue }
         let config = appDelegate.ghostty.config
 
+        if config.macosTabSidebar { return defaultValue }
+
         // If we have no window decorations, there's no reason to do anything but
         // the default titlebar (because there will be no titlebar).
         if !config.windowDecorations {
@@ -55,6 +57,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     /// The notification cancellable for focused surface property changes.
     private var surfaceAppearanceCancellables: Set<AnyCancellable> = []
+
+    private let tabSidebarSlot = TerminalTabSidebarSlotView()
 
     init(_ ghostty: Ghostty.App,
          withBaseConfig base: Ghostty.SurfaceConfiguration? = nil,
@@ -126,6 +130,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             self,
             selector: #selector(onCloseWindow),
             name: .ghosttyCloseWindow,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(onDidFinishRestoringWindows),
+            name: NSApplication.didFinishRestoringWindowsNotification,
             object: nil
         )
     }
@@ -429,6 +439,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             default:
                 parent.addTabbedWindowSafely(window, ordered: .above)
             }
+            controller.prepareTabSidebar()
         }
 
         // We're dispatching this async because otherwise the lastCascadePoint doesn't
@@ -492,6 +503,23 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     }
 
     // MARK: - Methods
+
+    func prepareTabSidebar() {
+        guard let window = window as? TerminalWindow, window.usesTabSidebar else { return }
+        window.contentView?.layoutSubtreeIfNeeded()
+        TerminalTabSidebarPresentation.shared(for: window).present(in: tabSidebarSlot)
+    }
+
+    @objc private func onDidFinishRestoringWindows(_ notification: Notification) {
+        guard let window, (window.tabGroup?.selectedWindow ?? window) === window else { return }
+        prepareTabSidebar()
+    }
+
+    @objc func toggleTabSidebar(_ sender: Any?) {
+        guard let window = window as? TerminalWindow, window.usesTabSidebar,
+              NSApp.currentEvent?.isARepeat != true else { return }
+        TerminalTabSidebarPresentation.shared(for: window).model.toggleVisibility()
+    }
 
     @objc private func ghosttyConfigDidChange(_ notification: Notification) {
         // Get our managed configuration object out
@@ -1035,8 +1063,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         // Initialize our content view to the SwiftUI root
+        let usesTabSidebar = (window as? TerminalWindow)?.usesTabSidebar == true
         let container = TerminalViewContainer {
-            TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            if usesTabSidebar {
+                TerminalSidebarContainer(sidebar: tabSidebarSlot) {
+                    TerminalView(ghostty: self.ghostty, viewModel: self, delegate: self)
+                }
+            } else {
+                TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            }
         }
 
         // Set the initial content size on the container so that
@@ -1044,6 +1079,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // without waiting for @FocusedValue to propagate through the
         // SwiftUI focus chain.
         container.initialContentSize = focusedSurface?.initialSize
+        if usesTabSidebar {
+            let padding = TerminalTabSidebarLayout.contentPadding * 2
+            container.initialContentSize?.width += TerminalTabSidebarLayout.initialWidth + 1 + padding
+            container.initialContentSize?.height += padding
+        }
 
         window.contentView = container
 
@@ -1110,6 +1150,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             terminalWindow.center()
         }
 
+        prepareTabSidebar()
         super.showWindow(sender)
     }
 
@@ -1176,6 +1217,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     override func windowDidBecomeKey(_ notification: Notification) {
         super.windowDidBecomeKey(notification)
+        prepareTabSidebar()
         self.relabelTabs()
         self.fixTabBar()
         terminalViewContainer?.updateGlassTintOverlay(isKeyWindow: true)
@@ -1417,35 +1459,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // Get our target window
         let targetWindow = tabbedWindows[finalIndex]
 
-        // Moving tabs on macOS 26 RC causes very nasty visual glitches in the titlebar tabs.
-        // I believe this is due to messed up constraints for our hacky tab bar. I'd like to
-        // find a better workaround. For now, this improves things dramatically.
-        //
-        // Reproduction: titlebar tabs, create two tabs, "move tab left"
-        if #available(macOS 26, *) {
-            if window is TitlebarTabsTahoeTerminalWindow {
-                tabGroup.removeWindow(selectedWindow)
-                targetWindow.addTabbedWindowSafely(selectedWindow, ordered: action.amount < 0 ? .below : .above)
-                DispatchQueue.main.async {
-                    selectedWindow.makeKey()
-                }
-
-                return
-            }
-        }
-
-        // Begin a group of window operations to minimize visual updates
-        NSAnimationContext.beginGrouping()
-        NSAnimationContext.current.duration = 0
-
-        // Remove and re-add the window in the correct position
-        tabGroup.removeWindow(selectedWindow)
-        targetWindow.addTabbedWindowSafely(selectedWindow, ordered: action.amount < 0 ? .below : .above)
-
-        // Ensure our window remains selected
-        selectedWindow.makeKey()
-
-        NSAnimationContext.endGrouping()
+        selectedWindow.moveTab(to: targetWindow)
     }
 
     @objc private func onGotoTab(notification: SwiftUI.Notification) {
@@ -1580,6 +1594,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 extension TerminalController {
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(toggleTabSidebar):
+            guard let window = window as? TerminalWindow, window.usesTabSidebar else { return false }
+            let model = TerminalTabSidebarPresentation.shared(for: window).model
+            item.title = model.isVisible ? "Hide Sidebar" : "Show Sidebar"
+            return true
+
         case #selector(closeTabsOnTheRight):
             guard let window, let tabGroup = window.tabGroup else { return false }
             guard let currentIndex = tabGroup.windows.firstIndex(of: window) else { return false }
