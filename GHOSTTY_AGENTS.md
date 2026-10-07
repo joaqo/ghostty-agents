@@ -27,6 +27,21 @@ The sidebar overrides `macos-titlebar-style`.
 To restore the upstream tab layout, add `macos-tab-sidebar = false` to your
 Ghostty configuration and restart the app. Quick Terminal retains its existing UI.
 
+## Agent control
+
+Other agents can read and drive the agents in Ghostty Agents panes with the
+`agent` CLI (`~/agent`; see `agent --help` for `sessions`, `transcript`, `screen`,
+`send`, and `key`), and `terminal open` prints the new pane's terminal id.
+Fullscreen agent TUIs keep no scrollback, so history comes from the agents' logs
+while the screen shows interactive state.
+
+Each pane's processes receive `GHOSTTY_AGENTS_TERMINAL_ID`, the pane's AppleScript
+`terminal` id, which survives relaunch restoration. The read-only `screen text`
+property of a `terminal` returns its visible text. Input uses Ghostty's existing
+`input text`, `send key`, and `perform action` commands. Scripts run from other
+apps need a one-time Automation approval in System Settings → Privacy & Security
+→ Automation.
+
 ## Build
 
 Requires Xcode 26 with the Metal Toolchain, Zig 0.15.2, and Nushell.
@@ -88,6 +103,7 @@ The sidebar tests exercise real AppKit tab groups, including live title and
 selection changes, closing tabs, reordering, and moving between window groups.
 Fullscreen checks cover reordering selected and background tabs in two-tab and
 larger groups, switching tabs after reordering, and returning to windowed mode.
+An AppleScript check reads a pane's `screen text` showing its own terminal id.
 
 ## Upstream updates
 

@@ -537,6 +537,8 @@ pub const Surface = struct {
         // Apply any environment variables that were requested.
         if (opts.env_var_count > 0) {
             const alloc = config.arenaAlloc();
+            // The shallow-cloned config shares its env map's storage with the app's config.
+            config.env = try config.env.clone(alloc);
             for (opts.env_vars.?[0..opts.env_var_count]) |env_var| {
                 const key = std.mem.sliceTo(env_var.key, 0);
                 const value = std.mem.sliceTo(env_var.value, 0);

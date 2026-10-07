@@ -390,7 +390,9 @@ extension Ghostty {
             ) { [weak self] event in self?.localEventHandler(event) }
 
             // Setup our surface. This will also initialize all the terminal IO.
-            let surface_cfg = baseConfig ?? SurfaceConfiguration()
+            var surface_cfg = baseConfig ?? SurfaceConfiguration()
+            // Lets a process find its own AppleScript terminal, e.g. to read or drive an agent's pane.
+            surface_cfg.environmentVariables["GHOSTTY_AGENTS_TERMINAL_ID"] = id.uuidString
             pwd = surface_cfg.workingDirectory
             let surface = surface_cfg.withCValue(view: self) { surface_cfg_c in
                 ghostty_surface_new(app, &surface_cfg_c)

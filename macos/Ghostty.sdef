@@ -90,6 +90,7 @@
         <cocoa key="title"/>
       </property>
       <property name="working directory" code="Gwdr" type="text" access="r" description="Current working directory for the terminal process."/>
+      <property name="screen text" code="GsTx" type="text" access="r" description="Text currently visible in the terminal."/>
       <responds-to command="split">
         <cocoa method="handleSplitCommand:"/>
       </responds-to>
