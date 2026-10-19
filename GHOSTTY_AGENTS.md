@@ -42,6 +42,12 @@ property of a `terminal` returns its visible text. Input uses Ghostty's existing
 apps need a one-time Automation approval in System Settings → Privacy & Security
 → Automation.
 
+## Background tabs
+
+AppleScript `new tab ... without focusing` adds a tab at the end of the window's
+tabs without selecting it, activating the app, or restoring a minimized window,
+and opens a background window if none exists. `terminal open --keep-focus` uses it.
+
 ## Build
 
 Requires Xcode 26 with the Metal Toolchain, Zig 0.15.2, and Nushell.
@@ -104,6 +110,8 @@ selection changes, closing tabs, reordering, and moving between window groups.
 Fullscreen checks cover reordering selected and background tabs in two-tab and
 larger groups, switching tabs after reordering, and returning to windowed mode.
 An AppleScript check reads a pane's `screen text` showing its own terminal id.
+Background tab checks cover the selected tab, tab order, minimized windows, a
+hidden sidebar, the hidden terminal's size, and its colors once shown.
 
 ## Upstream updates
 

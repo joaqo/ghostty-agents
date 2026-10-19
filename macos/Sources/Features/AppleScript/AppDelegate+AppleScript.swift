@@ -266,7 +266,8 @@ extension NSApplication {
         guard let createdController = TerminalController.newTab(
             appDelegate.ghostty,
             from: parentWindow,
-            withBaseConfig: baseConfig
+            withBaseConfig: baseConfig,
+            focus: command.evaluatedArguments?["focus"] as? Bool ?? true
         ) else {
             command.scriptErrorNumber = errAEEventFailed
             command.scriptErrorString = "Failed to create tab."

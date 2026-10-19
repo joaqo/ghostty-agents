@@ -179,6 +179,9 @@
       <parameter name="with configuration" code="GNtS" type="surface configuration" optional="yes" description="Base surface configuration for the initial terminal.">
         <cocoa key="configuration"/>
       </parameter>
+      <parameter name="focusing" code="GNtF" type="boolean" optional="yes" description="Select the tab and bring Ghostty to the front. Default: true.">
+        <cocoa key="focus"/>
+      </parameter>
       <result type="tab" description="The newly created tab."/>
     </command>
 

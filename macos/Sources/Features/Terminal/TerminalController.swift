@@ -222,7 +222,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     static func newWindow(
         _ ghostty: Ghostty.App,
         withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil,
-        withParent explicitParent: NSWindow? = nil
+        withParent explicitParent: NSWindow? = nil,
+        focus: Bool = true
     ) -> TerminalController {
         let c = TerminalController.init(ghostty, withBaseConfig: baseConfig)
 
@@ -266,6 +267,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                     Self.applyCascade(to: window, hasFixedPos: hasFixedPos)
                 }
             }
+
+            guard focus else { return }
 
             // All new_window actions force our app to be active, so that the new
             // window is focused and visible.
@@ -366,16 +369,19 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         return c
     }
 
+    /// Without `focus`, the tab opens at the end of the tab group without changing the
+    /// selected tab, the key window, the active app, or whether the window is minimized.
     static func newTab(
         _ ghostty: Ghostty.App,
         from parent: NSWindow? = nil,
-        withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil
+        withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil,
+        focus: Bool = true
     ) -> TerminalController? {
         // Making sure that we're dealing with a TerminalController. If not,
         // then we just create a new window.
         guard let parent,
               let parentController = parent.windowController as? TerminalController else {
-            return newWindow(ghostty, withBaseConfig: baseConfig, withParent: parent)
+            return newWindow(ghostty, withBaseConfig: baseConfig, withParent: parent, focus: focus)
         }
 
         // If our parent is in non-native fullscreen, then new tabs do not work.
@@ -397,7 +403,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // If the parent is miniaturized, then macOS exhibits really strange behaviors
         // so we have to bring it back out.
-        if parent.isMiniaturized { parent.deminiaturize(self) }
+        if focus, parent.isMiniaturized { parent.deminiaturize(self) }
 
         // If our parent tab group already has this window, macOS added it and
         // we need to remove it so we can set the correct order in the next line.
@@ -414,7 +420,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // If we don't allow tabs then we create a new window instead.
         if window.tabbingMode != .disallowed {
             // Add the window to the tab group and show it.
-            switch ghostty.config.windowNewTabPosition {
+            switch focus ? ghostty.config.windowNewTabPosition : "end" {
             case "end":
                 // If we already have a tab group and we want the new tab to open at the end,
                 // then we use the last window in the tab group as the parent.
@@ -428,7 +434,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             default:
                 parent.addTabbedWindowSafely(window, ordered: .above)
             }
-            controller.prepareTabSidebar()
+            controller.prepareTabSidebar(present: focus)
         }
 
         // We're dispatching this async because otherwise the lastCascadePoint doesn't
@@ -442,7 +448,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 Self.applyCascade(to: window, hasFixedPos: hasFixedPos)
             }
 
+            // Showing a tab selects it, so a background tab is shown only as a window of its own.
+            guard focus || window.tabGroup?.windows.count ?? 1 == 1 else { return }
             controller.showWindow(self)
+            guard focus else { return }
             window.makeKeyAndOrderFront(self)
 
             // We also activate our app so that it becomes front. This may be
@@ -493,10 +502,13 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     // MARK: - Methods
 
-    func prepareTabSidebar() {
+    func prepareTabSidebar(present: Bool = true) {
         guard let window = window as? TerminalWindow, window.usesTabSidebar else { return }
+        let presentation = TerminalTabSidebarPresentation.shared(for: window)
+        // A hidden tab only follows the sidebar's visibility; the shared view stays in the selected tab.
+        guard present else { return tabSidebarSlot.bind(to: presentation.model) }
         window.contentView?.layoutSubtreeIfNeeded()
-        TerminalTabSidebarPresentation.shared(for: window).present(in: tabSidebarSlot)
+        presentation.present(in: tabSidebarSlot)
     }
 
     @objc private func onDidFinishRestoringWindows(_ notification: Notification) {
@@ -1208,6 +1220,13 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         self.relabelTabs()
         self.fixTabBar()
         terminalViewContainer?.updateGlassTintOverlay(isKeyWindow: true)
+    }
+
+    override func windowDidChangeOcclusionState(_ notification: Notification) {
+        super.windowDidChangeOcclusionState(notification)
+        // Windows are only styled while visible, and a tab opened in the background
+        // already has its focused surface by the time it is first shown.
+        if window?.occlusionState.contains(.visible) == true { syncAppearance() }
     }
 
     override func windowDidResignKey(_ notification: Notification) {
